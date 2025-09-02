@@ -71,3 +71,4 @@ def parse_business_card(div):
         "lat": lat,
         "lng": lng,
     }
+

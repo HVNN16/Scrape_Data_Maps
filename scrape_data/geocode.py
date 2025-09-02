@@ -29,3 +29,4 @@ def reverse_geocode(lat, lng):
         return None
     except Exception:
         return None
+
