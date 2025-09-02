@@ -2,7 +2,6 @@
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
@@ -15,6 +14,8 @@ import random
 import re
 from datetime import datetime
 import requests
+import sys
+import traceback
 
 # ================== CẤU HÌNH POSTGRES ==================
 PG_DSN = "host=localhost port=5432 dbname=gisdb user=postgres password=12345"
@@ -24,7 +25,8 @@ def connect_postgres():
     cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     return conn, cur
 
-def ensure_table(cur, conn):
+def ensure_tables(cur, conn):
+    # Bảng dữ liệu
     cur.execute("""
         CREATE TABLE IF NOT EXISTS grocery_stores (
             id SERIAL PRIMARY KEY,
@@ -50,7 +52,25 @@ def ensure_table(cur, conn):
     cur.execute("CREATE INDEX IF NOT EXISTS idx_gs_province ON grocery_stores (province);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_gs_district ON grocery_stores (district);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_gs_latlng ON grocery_stores (latitude, longitude);")
+
+    # Bảng lưu tiến trình
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS crawl_progress (
+            province TEXT NOT NULL,
+            district TEXT NOT NULL,
+            keyword  TEXT NOT NULL,
+            status   TEXT NOT NULL DEFAULT 'pending',
+            last_place_id TEXT,
+            updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+            CONSTRAINT crawl_progress_pk PRIMARY KEY (province, district, keyword)
+        );
+    """)
+    # migrate cột nếu thiếu (cho trường hợp bảng cũ)
+    cur.execute("ALTER TABLE crawl_progress ADD COLUMN IF NOT EXISTS last_place_id TEXT;")
+    cur.execute("ALTER TABLE crawl_progress ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending';")
+    cur.execute("ALTER TABLE crawl_progress ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT NOW();")
     conn.commit()
+
 
 # ================== DANH SÁCH TỈNH/HUYỆN (demo) ==================
 province_districts = {
@@ -73,6 +93,26 @@ driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), opti
 total_saved = 0
 total_duplicates = 0
 
+# ================== HÀM PROGRESS ==================
+def progress_get(cur, province, district, keyword):
+    cur.execute("""
+        SELECT status, last_place_id, updated_at
+        FROM crawl_progress
+        WHERE province=%s AND district=%s AND keyword=%s
+    """, (province, district, keyword))
+    return cur.fetchone()
+
+def progress_upsert(cur, conn, province, district, keyword, status, last_place_id=None):
+    cur.execute("""
+        INSERT INTO crawl_progress (province, district, keyword, status, last_place_id, updated_at)
+        VALUES (%s, %s, %s, %s, %s, NOW())
+        ON CONFLICT (province, district, keyword) DO UPDATE
+          SET status = EXCLUDED.status,
+              last_place_id = EXCLUDED.last_place_id,
+              updated_at = NOW();
+    """, (province, district, keyword, status, last_place_id))
+    conn.commit()
+
 # ================== TRÙNG LẶP ==================
 def is_duplicate(cur, place_id):
     if not place_id or place_id == 'N/A':
@@ -82,9 +122,6 @@ def is_duplicate(cur, place_id):
 
 # ================== CATEGORY ==================
 def get_category_from_name(name: str) -> str:
-    """
-    Chỉ 'Nhà thuốc' | 'Cửa hàng vật tư nông nghiệp' | 'Khác'
-    """
     n = (name or "").lower()
     if any(k in n for k in ['nhà thuốc', 'pharmacy', 'quầy thuốc', 'pharmacity', 'hiệu thuốc']):
         return 'Nhà thuốc'
@@ -96,10 +133,6 @@ def get_category_from_name(name: str) -> str:
 _geocode_cache = {}
 
 def reverse_geocode(lat, lng):
-    """
-    Trả về display_name từ lat/lng bằng Nominatim (OSM).
-    Tôn trọng rate limit (~1 req/s) và set User-Agent rõ ràng.
-    """
     try:
         if lat in (None, 'N/A', '') or lng in (None, 'N/A', ''):
             return None
@@ -124,37 +157,22 @@ def reverse_geocode(lat, lng):
 
 # ================== CUỘN DANH SÁCH HIỆU QUẢ ==================
 def _count_cards(driver):
-    # Các card kết quả trong list thường có class Nv2PK
     return len(driver.find_elements(By.CSS_SELECTOR, "div.Nv2PK"))
 
 def scroll_to_list_bottom(driver, feed_elem, patience=4, max_rounds=120):
-    """
-    Cuộn đến đáy danh sách:
-    - Dùng JS: scrollTop = scrollHeight (ổn định hơn gửi END)
-    - Dừng khi không tăng số item trong 'patience' vòng liên tiếp
-    - 'max_rounds' để tránh vòng lặp vô hạn
-    """
-    # Chờ ít nhất 1 item xuất hiện
     WebDriverWait(driver, 15).until(lambda d: _count_cards(d) > 0)
-
     prev = -1
     same = 0
     rounds = 0
 
     while rounds < max_rounds:
         rounds += 1
-        # Cuộn tới đáy hiện tại
         driver.execute_script("arguments[0].scrollTop = arguments[0].scrollHeight;", feed_elem)
-
-        # Chờ tối đa 3s nếu số item tăng
         try:
             WebDriverWait(driver, 3).until(lambda d: _count_cards(d) > prev)
             curr = _count_cards(driver)
         except TimeoutException:
             curr = _count_cards(driver)
-
-        # Debug tuỳ thích
-        # print(f"[SCROLL] round {rounds} -> {curr} items")
 
         if curr == prev:
             same += 1
@@ -163,10 +181,7 @@ def scroll_to_list_bottom(driver, feed_elem, patience=4, max_rounds=120):
             prev = curr
 
         if same >= patience:
-            # Không thấy item mới trong 'patience' vòng => coi như đáy thật
             break
-
-        # Nghỉ nhẹ cho Maps load
         time.sleep(random.uniform(0.8, 1.2))
 
 # ================== LƯU POSTGRES ==================
@@ -232,140 +247,168 @@ def main():
     global total_saved, total_duplicates
 
     pg_conn, pg_cur = connect_postgres()
-    ensure_table(pg_cur, pg_conn)
+    ensure_tables(pg_cur, pg_conn)
 
-    for province, districts in province_districts.items():
-        for district in districts:
-            for keyword in keywords:
-                print(f"===== Đang tìm kiếm: {keyword} tại {district}, {province} =====")
-                search_query = f"{keyword} tại {district} {province}"
-                url = f"https://www.google.com/maps/search/{search_query.replace(' ', '+')}/"
-                driver.get(url)
-                time.sleep(random.uniform(5, 8))
+    try:
+        for province, districts in province_districts.items():
+            for district in districts:
+                for keyword in keywords:
+                    # Check progress
+                    pg = progress_get(pg_cur, province, district, keyword)
+                    if pg and pg['status'] == 'done':
+                        print(f"[SKIP] Đã hoàn thành: {keyword} @ {district}, {province}")
+                        continue
 
-                # Phát hiện CAPTCHA (thô sơ)
-                page_source_lower = driver.page_source.lower()
-                if ("captcha" in page_source_lower) or ("detected unusual traffic" in page_source_lower):
-                    print(f"[STOP] CAPTCHA tại {district}, {province}.")
-                    break
+                    # Đánh dấu bắt đầu chạy combo này
+                    progress_upsert(pg_cur, pg_conn, province, district, keyword, status='running')
 
-                # Tìm container danh sách
-                try:
-                    scroll_container = WebDriverWait(driver, 12).until(
-                        EC.presence_of_element_located((By.CSS_SELECTOR, 'div[role="feed"]'))
-                    )
-                except Exception as e:
-                    print(f"[DEBUG] Không tìm thấy container danh sách tại {district}, {province}: {e}")
-                    continue
+                    print(f"===== Đang tìm kiếm: {keyword} tại {district}, {province} =====")
+                    search_query = f"{keyword} tại {district} {province}"
+                    url = f"https://www.google.com/maps/search/{search_query.replace(' ', '+')}/"
+                    driver.get(url)
+                    time.sleep(random.uniform(5, 8))
 
-                # Cuộn đến đáy danh sách (phiên bản bền)
-                scroll_to_list_bottom(driver, scroll_container, patience=4, max_rounds=120)
+                    # Phát hiện CAPTCHA (thô sơ)
+                    page_source_lower = driver.page_source.lower()
+                    if ("captcha" in page_source_lower) or ("detected unusual traffic" in page_source_lower):
+                        print(f"[STOP] CAPTCHA tại {district}, {province}.")
+                        # Đánh dấu partial để lần sau tiếp tục
+                        progress_upsert(pg_cur, pg_conn, province, district, keyword, status='partial')
+                        continue
 
-                # Parse sau khi đã cuộn hết
-                soup = BeautifulSoup(driver.page_source, 'html.parser')
-                businesses = soup.find_all('div', class_=lambda x: x and 'Nv2PK' in x)
-                print(f"[DEBUG] Tổng cộng {len(businesses)} cửa hàng cuối cùng tại {district}, {province}")
-
-                district_saved = 0
-                for business in businesses:
+                    # Tìm container danh sách
                     try:
-                        # Tên
-                        name_tag = business.find('div', class_='qBF1Pd')
-                        name = name_tag.text.strip() if name_tag else 'N/A'
+                        scroll_container = WebDriverWait(driver, 12).until(
+                            EC.presence_of_element_located((By.CSS_SELECTOR, 'div[role="feed"]'))
+                        )
+                    except Exception as e:
+                        print(f"[DEBUG] Không tìm thấy container danh sách tại {district}, {province}: {e}")
+                        progress_upsert(pg_cur, pg_conn, province, district, keyword, status='failed')
+                        continue
 
-                        category = get_category_from_name(name)
+                    # Cuộn đến đáy danh sách
+                    scroll_to_list_bottom(driver, scroll_container, patience=4, max_rounds=120)
 
-                        # Place ID + URL
-                        place_id = 'N/A'
-                        map_url = None
-                        link_tag = business.find('a', class_='hfpxzc', href=True)
-                        if link_tag and 'href' in link_tag.attrs:
-                            map_url = link_tag['href']
-                            href = link_tag['href']
-                            m = re.search(r'!19s([^?]+)', href) or re.search(r'data=[^!]+!1s([^!]+)', href)
-                            if m:
-                                place_id = m.group(1)
+                    # Parse sau khi đã cuộn hết
+                    soup = BeautifulSoup(driver.page_source, 'html.parser')
+                    businesses = soup.find_all('div', class_=lambda x: x and 'Nv2PK' in x)
+                    print(f"[DEBUG] Tổng cộng {len(businesses)} cửa hàng cuối cùng tại {district}, {province}")
 
-                        # Ảnh
-                        image_url = 'N/A'
-                        img_tag = business.find('img')
-                        if img_tag and img_tag.get('src'):
-                            image_url = img_tag['src']
+                    district_saved = 0
+                    for business in businesses:
+                        try:
+                            # Tên
+                            name_tag = business.find('div', class_='qBF1Pd')
+                            name = name_tag.text.strip() if name_tag else 'N/A'
 
-                        # Rating
-                        rating_tag = business.find('span', class_='MW4etd')
-                        rating = rating_tag.text.strip() if rating_tag else 'N/A'
+                            category = get_category_from_name(name)
 
-                        # Tọa độ
-                        lat, lng = None, None
-                        if link_tag:
-                            href = link_tag['href']
-                            m = re.search(r'!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)', href)
-                            if m:
-                                lat, lng = m.groups()
-                            else:
-                                m = re.search(r'/@(-?\d+\.\d+),(-?\d+\.\d+)', href)
+                            # Place ID + URL
+                            place_id = 'N/A'
+                            map_url = None
+                            link_tag = business.find('a', class_='hfpxzc', href=True)
+                            if link_tag and 'href' in link_tag.attrs:
+                                map_url = link_tag['href']
+                                href = link_tag['href']
+                                m = re.search(r'!19s([^?]+)', href) or re.search(r'data=[^!]+!1s([^!]+)', href)
+                                if m:
+                                    place_id = m.group(1)
+
+                            # Ảnh
+                            image_url = 'N/A'
+                            img_tag = business.find('img')
+                            if img_tag and img_tag.get('src'):
+                                image_url = img_tag['src']
+
+                            # Rating
+                            rating_tag = business.find('span', class_='MW4etd')
+                            rating = rating_tag.text.strip() if rating_tag else 'N/A'
+
+                            # Tọa độ
+                            lat, lng = None, None
+                            if link_tag:
+                                href = link_tag['href']
+                                m = re.search(r'!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)', href)
                                 if m:
                                     lat, lng = m.groups()
+                                else:
+                                    m = re.search(r'/@(-?\d+\.\d+),(-?\d+\.\d+)', href)
+                                    if m:
+                                        lat, lng = m.groups()
 
-                        # Trạng thái + số điện thoại
-                        status, closing_time, phone = 'N/A', 'N/A', 'N/A'
-                        info_tags = business.find_all('div', class_='W4Efsd')
-                        if len(info_tags) > 1:
-                            details_tag = info_tags[1]
-                            status_tag = details_tag.find('span', style=lambda v: v and 'rgba(25,134,57' in v)
-                            status = status_tag.text.strip() if status_tag else 'N/A'
-                            closing_time_tag = details_tag.find('span', style='font-weight: 400;')
-                            closing_time = closing_time_tag.text.strip(' ⋅ ').strip() if closing_time_tag else 'N/A'
-                            phone_tag = details_tag.find('span', class_='UsdlK')
-                            phone = phone_tag.text.strip() if phone_tag else 'N/A'
+                            # Trạng thái + số điện thoại
+                            status, closing_time, phone = 'N/A', 'N/A', 'N/A'
+                            info_tags = business.find_all('div', class_='W4Efsd')
+                            if len(info_tags) > 1:
+                                details_tag = info_tags[1]
+                                status_tag = details_tag.find('span', style=lambda v: v and 'rgba(25,134,57' in v)
+                                status = status_tag.text.strip() if status_tag else 'N/A'
+                                closing_time_tag = details_tag.find('span', style='font-weight: 400;')
+                                closing_time = closing_time_tag.text.strip(' ⋅ ').strip() if closing_time_tag else 'N/A'
+                                phone_tag = details_tag.find('span', class_='UsdlK')
+                                phone = phone_tag.text.strip() if phone_tag else 'N/A'
 
-                        # Địa chỉ (reverse geocode)
-                        address = reverse_geocode(lat, lng)
+                            # Địa chỉ (reverse geocode)
+                            address = reverse_geocode(lat, lng)
 
-                        store_data = {
-                            'province': province,
-                            'district': district,
-                            'place_id': place_id,
-                            'name': name,
-                            'image': image_url,
-                            'rating': rating,
-                            'category': category,
-                            'status': status,
-                            'closing_time': closing_time,
-                            'phone': phone,
-                            'latitude': float(lat) if lat not in (None, 'N/A', '') else None,
-                            'longitude': float(lng) if lng not in (None, 'N/A', '') else None,
-                            'address': address,
-                            'map_url': map_url,
-                            'created_at': datetime.now()
-                        }
+                            store_data = {
+                                'province': province,
+                                'district': district,
+                                'place_id': place_id,
+                                'name': name,
+                                'image': image_url,
+                                'rating': rating,
+                                'category': category,
+                                'status': status,
+                                'closing_time': closing_time,
+                                'phone': phone,
+                                'latitude': float(lat) if lat not in (None, 'N/A', '') else None,
+                                'longitude': float(lng) if lng not in (None, 'N/A', '') else None,
+                                'address': address,
+                                'map_url': map_url,
+                                'created_at': datetime.now()
+                            }
 
-                        shown_addr = store_data['address'][:80] + '...' if store_data['address'] and len(store_data['address']) > 80 else store_data['address']
-                        print(f"[DEBUG] {name} | Cat={category} | Phone={phone} | Addr={shown_addr or 'None'} | URL={'yes' if map_url else 'no'}")
+                            if save_to_postgres(pg_cur, pg_conn, store_data):
+                                district_saved += 1
 
-                        if save_to_postgres(pg_cur, pg_conn, store_data):
-                            district_saved += 1
+                        except KeyboardInterrupt:
+                            print("\n[INTERRUPT] Bạn vừa dừng bằng Ctrl+C. Lưu trạng thái partial...")
+                            progress_upsert(pg_cur, pg_conn, province, district, keyword, status='partial')
+                            raise
+                        except Exception as e:
+                            print(f"[DEBUG] Lỗi khi xử lý một mục tại {district}, {province}: {e}")
+                            # có thể log thêm traceback nếu cần
+                            # traceback.print_exc()
 
-                    except Exception as e:
-                        print(f"[DEBUG] Lỗi khi xử lý một mục tại {district}, {province}: {e}")
+                    print(f"[INFO] Đã lưu {district_saved} cửa hàng mới tại {district}, {province}")
 
-                print(f"[INFO] Đã lưu {district_saved} cửa hàng mới tại {district}, {province}")
-                time.sleep(random.uniform(5, 10))
+                    # Done combo này
+                    progress_upsert(pg_cur, pg_conn, province, district, keyword, status='done')
 
-    # Tổng kết
-    pg_cur.execute("SELECT COUNT(*) FROM grocery_stores;")
-    total_in_db = pg_cur.fetchone()[0]
-    print("\n===== KẾT QUẢ CUỐI CÙNG =====")
-    print(f"Tổng số cửa hàng đã lưu: {total_saved}")
-    print(f"Tổng số cửa hàng trùng lặp bỏ qua: {total_duplicates}")
-    print(f"Tổng số bản ghi trong database: {total_in_db}")
+                    time.sleep(random.uniform(5, 10))
 
-    # backfill_addresses(pg_cur, pg_conn, limit=1000)  # tuỳ chọn
+    except KeyboardInterrupt:
+        print("\n[EXIT] Nhận Ctrl+C. Kết thúc sớm nhưng tiến trình đã được đánh dấu partial nơi cần thiết.")
+    except Exception as e:
+        print(f"[FATAL] Lỗi không mong đợi: {e}")
+        traceback.print_exc()
+    finally:
+        # Tổng kết
+        try:
+            pg_cur.execute("SELECT COUNT(*) FROM grocery_stores;")
+            total_in_db = pg_cur.fetchone()[0]
+        except Exception:
+            total_in_db = 'N/A'
 
-    driver.quit()
-    pg_cur.close()
-    pg_conn.close()
+        print("\n===== KẾT QUẢ CUỐI CÙNG =====")
+        print(f"Tổng số cửa hàng đã lưu (mới): {total_saved}")
+        print(f"Tổng số cửa hàng trùng lặp bỏ qua: {total_duplicates}")
+        print(f"Tổng số bản ghi trong database: {total_in_db}")
+
+        driver.quit()
+        pg_cur.close()
+        pg_conn.close()
 
 if __name__ == "__main__":
     main()
