@@ -24,7 +24,7 @@ def reverse_geocode(lat, lng):
         if resp.status_code == 200:
             addr = resp.json().get("display_name")
             _cache[key] = addr
-            time.sleep(OSM_RATE_LIMIT_SLEEP)  # tôn trọng rate limit ~1 req/s
+            time.sleep(OSM_RATE_LIMIT_SLEEP)  
             return addr
         return None
     except Exception:

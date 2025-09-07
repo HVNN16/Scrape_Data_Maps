@@ -38,3 +38,103 @@ scraper.py: chương trình chính — khởi tạo Selenium, lặp các combo, 
 requirements.txt: các thư viện Python cần cài.
 
 README.md: hướng dẫn cài đặt/chạy, cách resume và chỉnh sửa tiến trình. -->
+
+
+# 🟢 Bước 1: Thu thập & Chuẩn hoá dữ liệu
+
+## 📌 Giới thiệu
+Ở bước 1, nhóm xây dựng công cụ **scraping Google Maps** bằng **Python + Selenium** để thu thập dữ liệu về:
+- **Hiệu thuốc tây**  
+- **Cửa hàng vật tư nông nghiệp**
+
+Sau khi thu thập, dữ liệu được chuẩn hoá và lưu vào **PostgreSQL/PostGIS** để phục vụ cho các bước tiếp theo (loại bỏ trùng lặp, trực quan hoá, xây công cụ tìm kiếm khách hàng).
+
+---
+
+## 🗂️ Cấu trúc thư mục
+
+scrape_data/
+│── config.py # Cấu hình: danh sách tỉnh/huyện, keywords, user-agent
+│── scraper.py # Script chính, điều khiển quá trình scraping
+│── parser.py # Phân tích HTML của từng business card trong Google Maps
+│── scroll.py # Tự động cuộn để tải đủ kết quả
+│── geocode.py # Reverse geocoding: lấy địa chỉ từ tọa độ
+│── db.py # Kết nối PostgreSQL + PostGIS, lưu dữ liệu
+│── progress.py # Theo dõi & resume tiến trình scraping
+│── requirements.txt # Thư viện cần cài đặt
+│── README.md # Tài liệu mô tả (file này)
+
+
+---
+
+## 🔄 Quy trình scraping
+
+1. **Sinh query tìm kiếm**  
+   Ghép: `keyword + district + province` từ `config.py`.
+
+2. **Mở Google Maps bằng Selenium**  
+   - `scraper.py` nhập query vào ô tìm kiếm.  
+   - Xử lý captcha & các lỗi mạng.  
+
+3. **Cuộn kết quả**  
+   - `scroll.py` cuộn xuống để tải đủ danh sách cửa hàng.
+
+4. **Parse dữ liệu từng cửa hàng**  
+   - `parser.py` trích xuất:  
+     - `name`, `category`, `place_id`  
+     - `lat`, `lng`, `image`  
+     - `status`, `closing_time`  
+     - `phone`, `map_url`  
+
+5. **Lấy địa chỉ chi tiết**  
+   - `geocode.py` chuyển toạ độ → địa chỉ chính xác.  
+   - Kiểm tra xem có thuộc tỉnh/huyện mục tiêu hay không.
+
+6. **Lưu dữ liệu vào PostgreSQL**  
+   - `db.py` lưu vào bảng `grocery_stores`.  
+   - `progress.py` ghi trạng thái (`running`, `done`, `failed`) để resume dễ dàng.
+
+---
+
+## 🛠️ Chuẩn hoá dữ liệu
+
+Sau khi thu thập, dữ liệu được chuẩn hoá sang bảng **`shops_clean`**:
+
+| Cột           | Mô tả                                                |
+|---------------|-------------------------------------------------------|
+| `shop_type`   | Chuẩn về: `drugstore` hoặc `agri_supply`             |
+| `status`      | Chuẩn về: `open`, `closed`, `temp_closed`, `unknown` |
+| `geom`        | Điểm GPS kiểu `geography(Point,4326)` (PostGIS)      |
+| `metadata`    | Giữ thêm `closing_time`, `status_raw`, `category_raw`|
+
+Ngoài ra giữ lại đầy đủ: `name`, `province`, `district`, `address`, `phone`, `rating`, `image`, `map_url`.
+
+👉 Nhờ chuẩn hoá, dữ liệu trở nên đồng bộ, dễ truy vấn & trực quan hoá.
+
+---
+
+## 📊 Kết quả bước 1
+
+- **19.376 cửa hàng** được thu thập thành công.  
+- **0 bản ghi thiếu toạ độ.**  
+- **0 bản ghi nằm ngoài phạm vi Việt Nam.**  
+- Dữ liệu sạch, đã chuẩn bị cho:  
+  - **Bước 2:** Loại bỏ trùng lặp.  
+  - **Bước 3:** Trực quan hoá độ phủ.  
+  - **Bước 4:** Xây dựng công cụ tìm kiếm khách hàng.
+
+---
+
+## 🚀 Demo hình ảnh (minh hoạ pipeline)
+
+```mermaid
+flowchart LR
+    A[config.py<br/>Danh sách tỉnh, huyện, từ khoá] --> B[scraper.py]
+    B --> C[scroll.py<br/>Cuộn danh sách kết quả]
+    B --> D[parser.py<br/>Phân tích business card]
+    B --> E[geocode.py<br/>Lấy địa chỉ từ tọa độ]
+    D --> F[db.py<br/>Lưu PostgreSQL]
+    E --> F
+    B --> G[progress.py<br/>Theo dõi tiến trình]
+    F --> H[(grocery_stores)]
+    H --> I[(shops_clean<br/>chuẩn hoá dữ liệu)]
