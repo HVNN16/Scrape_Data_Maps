@@ -92,31 +92,37 @@ def categorize(name: str) -> str:
     n_no = remove_accents(name or "").lower().strip()
 
     keywords_pharmacy = [
+        # Nhà thuốc
         "nhà thuốc", "hiệu thuốc", "quầy thuốc", "tiệm thuốc",
         "nhà thuốc tây", "nhà thuốc đông y", "nhà thuốc tư nhân",
         "đại lý thuốc tây", "đại lý thuốc nam", "bán lẻ thuốc",
         "siêu thị thuốc", "quầy bán thuốc", "phòng thuốc",
-        "thuốc tây", "thuốc nam", "thuốc bắc",
-        "pharmacity", "long châu", "an khang", "guardian", "eco",
-        "pharmacy", "phamacy", "drugstore", "drug store", "chemist", "medical store"
-    ]
+        "thuốc tây"
 
-    keywords_vet = [
-        "thuốc thú y", "nhà thuốc thú y", "cửa hàng thú y",
-        "đại lý thuốc thú y", "cửa hàng thuốc cho chó mèo",
-        "vật tư thú y", "dụng cụ thú y", "trang thiết bị thú y",
-        "phòng khám thú y", "bệnh viện thú y", "trạm thú y",
-        "thuốc cho chó", "thuốc cho mèo", "thuốc cho gà",
-        "thuốc cho vịt", "thuốc cho heo", "thuốc gia súc", "thuốc gia cầm",
-        "vet shop", "vet pharmacy", "veterinary pharmacy", "veterinary drugstore",
-        "animal pharmacy", "pet medicine", "pet shop", "pet clinic"
+        # Chuỗi lớn
+        "pharmacity", "long châu", "an khang", "guardian",
+        "eco", "trung sơn", "phano", "medicare",
+
+        # English
+        "pharmacy", "phamacy", "drugstore", "drug store", "chemist", "medical store",
+
+        # Thực phẩm chức năng
+        "thực phẩm chức năng", "tpcn", "cửa hàng thực phẩm chức năng",
+        "cửa hàng vitamin", "shop thực phẩm chức năng",
+        "siêu thị thực phẩm chức năng", "thực phẩm bảo vệ sức khỏe",
+        "dinh dưỡng", "bổ sung sức khỏe", "thảo dược", "sâm nhung",
+
+        # English supplements
+        "supplement", "dietary supplement", "nutraceutical", "vitamin",
+        "collagen", "omega", "ginseng", "herbal medicine",
+        "wellness store", "health supplement", "nutrition store"
     ]
 
     if any(k in n for k in keywords_pharmacy) or any(remove_accents(k) in n_no for k in keywords_pharmacy):
         return "Nhà thuốc"
-    if any(k in n for k in keywords_vet) or any(remove_accents(k) in n_no for k in keywords_vet):
-        return "Cửa hàng thuốc thú y"
+
     return "Khác"
+
 
 # ==== Parse business card ====
 def parse_business_card(div):
