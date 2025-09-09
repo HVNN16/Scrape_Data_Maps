@@ -335,8 +335,8 @@ def main():
                         continue
                     progress_upsert(pg_cur, pg_conn, province, district, keyword, status='running')
 
-                    print(f"===== Tìm: {keyword}  {district}, {province} =====")
-                    search_query = f"{keyword}  {district} {province}"
+                    print(f"===== Tìm: {keyword} {district}, {province} =====")
+                    search_query = f"{keyword} {district} {province}"
                     driver.get("https://www.google.com/maps/")
 
                     try:
