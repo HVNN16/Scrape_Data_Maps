@@ -94,8 +94,8 @@ def categorize(name: str) -> str:
     keywords_pharmacy = [
         # Nhà thuốc
         "nhà thuốc", "hiệu thuốc", "quầy thuốc", "tiệm thuốc",
-        "nhà thuốc tây", "nhà thuốc đông y", "nhà thuốc tư nhân",
-        "đại lý thuốc tây", "đại lý thuốc nam", "bán lẻ thuốc",
+        "nhà thuốc tây", "nhà thuốc tư nhân",
+        "đại lý thuốc tây", "bán lẻ thuốc",
         "siêu thị thuốc", "quầy bán thuốc", "phòng thuốc",
         "thuốc tây"
 
@@ -108,12 +108,12 @@ def categorize(name: str) -> str:
 
         # Thực phẩm chức năng
         "thực phẩm chức năng", "tpcn", "cửa hàng thực phẩm chức năng",
-        "cửa hàng vitamin", "shop thực phẩm chức năng",
+        "shop thực phẩm chức năng",
         "siêu thị thực phẩm chức năng", "thực phẩm bảo vệ sức khỏe",
         "dinh dưỡng", "bổ sung sức khỏe", "thảo dược", "sâm nhung",
 
         # English supplements
-        "supplement", "dietary supplement", "nutraceutical", "vitamin",
+        "supplement", "dietary supplement", "nutraceutical",
         "collagen", "omega", "ginseng", "herbal medicine",
         "wellness store", "health supplement", "nutrition store"
     ]

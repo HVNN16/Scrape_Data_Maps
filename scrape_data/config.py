@@ -832,7 +832,28 @@ PROVINCE_DISTRICTS = {
     "Thành phố Cà Mau"
   ]
 }
-KEYWORDS = ["nhà thuốc", "cửa hàng vật tư nông nghiệp"]
+BASE_KEYWORDS = [
+    "nhà thuốc",
+    "tiệm thuốc",
+    "tiệm thuốc tây",
+    "quầy thuốc",
+    "cửa hàng thuốc"
+]
+
+LOCATION_PREPOSITIONS = ["", "tại", "ở", "thuộc", "gần", "khu vực", "xung quanh"]
+
+def build_keywords():
+    combos = []
+    for kw in BASE_KEYWORDS:
+        for prep in LOCATION_PREPOSITIONS:
+            if prep:  # có giới từ
+                combos.append(f"{kw} {prep}")
+            else:    # không có giới từ
+                combos.append(kw)
+    return combos
+
+KEYWORDS = build_keywords()
+
 
 # ====== Cuộn list ======
 SCROLL_PATIENCE = 4
