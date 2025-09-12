@@ -300,6 +300,35 @@ def in_target_area(addr: str, district: str, province: str) -> bool:
     return has_d or has_p
 
 
+# =============== Bộ lọc loại trừ “đông y/nam dược/cổ truyền/thú y” ===============
+
+EXCLUDE_KEYWORDS = [
+    "đông y", "nam dược", "cổ truyền", "y học cổ truyền",
+    "thuốc bắc", "thú y", "thú y viện", "pet", "veterinary","thuốc nam", "dong y", "nam duoc", "co truyen", "y hoc co truyen",
+    "thuoc bac", "thu y", "thu y vien", "thuy vien", "thuoc nam"
+]
+
+def _contains_any(text: str, terms) -> bool:
+    """So khớp không dấu + lowercase để bắt cả 'dong y', 'thu y'..."""
+    t = _norm(text or "")
+    for k in terms:
+        if _norm(k) in t:
+            return True
+    return False
+
+def is_excluded_by_name_or_category(info: dict) -> bool:
+    """
+    Loại trừ nếu tên hoặc category có chứa từ khóa không mong muốn.
+    - Dùng khi parser trả category từ hàm categorize(name) hoặc để trống.
+    """
+    name = info.get("name") or ""
+    cat  = info.get("category") or ""
+    blob = f"{name} {cat}"
+    # Nếu parser đã phân loại "Loại trừ" thì cũng bỏ luôn
+    if (cat.strip().lower() == "loại trừ"):
+        return True
+    return _contains_any(blob, EXCLUDE_KEYWORDS)
+
 
 # ========= Selenium driver =========
 
@@ -395,6 +424,11 @@ def main():
                             short_name = (name_for_log[:60] + '...') if len(name_for_log) > 60 else name_for_log
                             print(f"[{seen:03d}/{total_cards}] Đang xử lý: {short_name} | Cat={info.get('category','')}")
 
+                            # >>> Bộ lọc loại trừ đông y/nam dược/cổ truyền/thú y
+                            if is_excluded_by_name_or_category(info):
+                                print(f"   → [SKIP-EXCLUDE] {short_name} | Cat={info.get('category','')}")
+                                continue
+
                             # Bắt buộc có toạ độ thật (từ !3d..!4d..)
                             if not info["lat"] or not info["lng"]:
                                 print(f"   → [SKIP-NO-COORD] {short_name}")
@@ -461,3 +495,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

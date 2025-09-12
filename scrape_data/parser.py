@@ -88,8 +88,19 @@ def remove_accents(s: str) -> str:
 
 # ==== Phân loại cửa hàng ====
 def categorize(name: str) -> str:
+    """Trả về: 'Nhà thuốc' | 'Loại trừ' | 'Khác'"""
     n = (name or "").lower().strip()
     n_no = remove_accents(name or "").lower().strip()
+
+    # Từ khóa loại trừ (không thu thập)
+    exclude_keywords = [
+        "đông y", "nam dược", "cổ truyền", "y học cổ truyền",
+        "thuốc bắc", "thú y", "thú y viện", "pet", "veterinary","thuốc nam",
+        "dong y", "nam duoc", "co truyen", "y hoc co truyen",
+        "thuoc bac", "thu y", "thu y vien", "thuy vien", "thuoc nam"
+    ]
+    if any(k in n for k in exclude_keywords) or any(remove_accents(k) in n_no for k in exclude_keywords):
+        return "Loại trừ"
 
     keywords_pharmacy = [
         # Nhà thuốc
@@ -97,7 +108,7 @@ def categorize(name: str) -> str:
         "nhà thuốc tây", "nhà thuốc tư nhân",
         "đại lý thuốc tây", "bán lẻ thuốc",
         "siêu thị thuốc", "quầy bán thuốc", "phòng thuốc",
-        "thuốc tây"
+        "thuốc tây",  # <- PHẢI có dấu phẩy ở đây
 
         # Chuỗi lớn
         "pharmacity", "long châu", "an khang", "guardian",
@@ -106,7 +117,7 @@ def categorize(name: str) -> str:
         # English
         "pharmacy", "phamacy", "drugstore", "drug store", "chemist", "medical store",
 
-        # Thực phẩm chức năng
+        # Thực phẩm chức năng (nhiều nhà thuốc có bán)
         "thực phẩm chức năng", "tpcn", "cửa hàng thực phẩm chức năng",
         "shop thực phẩm chức năng",
         "siêu thị thực phẩm chức năng", "thực phẩm bảo vệ sức khỏe",
@@ -139,16 +150,25 @@ def parse_business_card(div):
     place_id = 'N/A'
     map_url = None
     lat, lng = None, None
+
     link_tag = div.find('a', class_='hfpxzc', href=True)
     if link_tag and 'href' in link_tag.attrs:
         map_url = link_tag['href']
         href = link_tag['href']
-        # place_id
-        m = re.search(r'!19s([^?]+)', href) or re.search(r'data=[^!]+!1s([^!]+)', href)
+
+        # place_id (nhiều pattern khác nhau)
+        m = (
+            re.search(r'!19s([^!?]+)', href) or
+            re.search(r'data=[^!]+!1s([^!&]+)', href)
+        )
         if m:
             place_id = m.group(1)
+
         # lat/lng
-        m = re.search(r'!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)', href) or re.search(r'/@(-?\d+\.\d+),(-?\d+\.\d+)', href)
+        m = (
+            re.search(r'!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)', href) or
+            re.search(r'/@(-?\d+\.\d+),(-?\d+\.\d+)', href)
+        )
         if m:
             lat, lng = m.groups()
 
@@ -167,12 +187,16 @@ def parse_business_card(div):
     info_tags = div.find_all('div', class_='W4Efsd')
     if len(info_tags) > 1:
         details_tag = info_tags[1]
+
         # status có màu xanh (mở cửa) dạng style rgba(25,134,57
         status_tag = details_tag.find('span', style=lambda v: v and 'rgba(25,134,57' in v)
         status = status_tag.text.strip() if status_tag else 'N/A'
+
         # giờ đóng/mở thường nằm trong span font-weight: 400
         closing_time_tag = details_tag.find('span', style='font-weight: 400;')
+        # Google hay có " ⋅ " kèm, nên strip thêm
         closing_time = closing_time_tag.text.strip(' ⋅ ').strip() if closing_time_tag else 'N/A'
+
         # phone
         phone_tag = details_tag.find('span', class_='UsdlK')
         phone = phone_tag.text.strip() if phone_tag else 'N/A'

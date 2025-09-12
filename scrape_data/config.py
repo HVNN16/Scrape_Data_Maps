@@ -840,7 +840,9 @@ BASE_KEYWORDS = [
     "cửa hàng thuốc"
 ]
 
-LOCATION_PREPOSITIONS = ["", "tại", "ở", "thuộc", "gần", "khu vực", "xung quanh"]
+# LOCATION_PREPOSITIONS = ["", "tại", "ở", "thuộc", "gần", "khu vực", "xung quanh"]
+LOCATION_PREPOSITIONS = ["tại","thuộc","xung quanh"]
+
 
 def build_keywords():
     combos = []
