@@ -1,0 +1,66 @@
+# Grocery Stores Scraper
+
+## Cấu hình cơ sở dữ liệu
+
+- Yêu cầu: PostgreSQL + PostGIS
+
+Cài PostGIS:
+```sql
+CREATE EXTENSION IF NOT EXISTS postgis;
+Xử lý cột geom
+Khi cào dữ liệu, bảng grocery_stores chỉ có latitude/longitude.
+Để phục vụ hiển thị bản đồ (Leaflet/OpenStreetMap), ta cần cột geometry.
+
+1. Cập nhật dữ liệu cũ
+Chạy 1 lần sau khi đã có dữ liệu:
+
+sql
+Sao chép mã
+UPDATE grocery_stores
+SET geom = ST_SetSRID(ST_MakePoint(longitude, latitude), 4326)
+WHERE geom IS NULL
+  AND longitude IS NOT NULL
+  AND latitude IS NOT NULL;
+2. Tự động cập nhật dữ liệu mới
+Cách A — Trigger trong PostgreSQL
+sql
+Sao chép mã
+CREATE OR REPLACE FUNCTION set_geom_from_latlon()
+RETURNS trigger AS $$
+BEGIN
+  IF NEW.longitude IS NOT NULL AND NEW.latitude IS NOT NULL THEN
+    NEW.geom := ST_SetSRID(ST_MakePoint(NEW.longitude, NEW.latitude), 4326);
+  ELSE
+    NEW.geom := NULL;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_set_geom ON grocery_stores;
+CREATE TRIGGER trg_set_geom
+BEFORE INSERT OR UPDATE OF latitude, longitude
+ON grocery_stores
+FOR EACH ROW
+EXECUTE FUNCTION set_geom_from_latlon();
+Cách B — Sửa code insert (Python)
+Trong hàm save_store, thêm cột geom:
+
+python
+Sao chép mã
+geom = ST_SetSRID(ST_MakePoint(%(longitude)s, %(latitude)s), 4326)
+Cách C — Cột sinh tự động (generated column)
+sql
+Sao chép mã
+ALTER TABLE grocery_stores DROP COLUMN IF EXISTS geom;
+ALTER TABLE grocery_stores
+ADD COLUMN geom geometry(Point,4326)
+GENERATED ALWAYS AS (
+  ST_SetSRID(ST_MakePoint(longitude, latitude), 4326)
+) STORED;
+👉 Khuyên dùng Trigger (Cách A): bền vững, không phụ thuộc code ứng dụng.
+
+3. Tạo index không gian
+sql
+Sao chép mã
+CREATE INDEX IF NOT EXISTS idx_gs_geom ON grocery_stores USING GIST (geom);
